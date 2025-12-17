@@ -37,49 +37,88 @@ serve(async (req) => {
       throw new Error("LOVABLE_API_KEY is not configured");
     }
 
-    // Build context about current flow
+    console.log("Chat assistant received:", { message, hasFlow: !!flow, historyLength: conversationHistory?.length });
+
+    // Build detailed context about current flow
     let flowContext = "";
     if (flow && flow.stops && flow.stops.length > 0) {
       flowContext = `
-Current itinerary has ${flow.stops.length} stops:
-${flow.stops.map((stop: FlowStop, i: number) => `${i + 1}. ${stop.name} (${stop.category}) - ${stop.time}, ${stop.duration} min, ${stop.price} - "${stop.reason}"`).join("\n")}
-Total duration: ${flow.totalDuration} minutes
-Budget range: ${flow.budgetRange}
+CURRENT ITINERARY (${flow.stops.length} stops):
+${flow.stops.map((stop: FlowStop, i: number) => 
+`Stop ${i + 1}: "${stop.name}"
+  - Category: ${stop.category}
+  - Time: ${stop.time}
+  - Duration: ${stop.duration} minutes
+  - Price: ${stop.price}
+  - Rating: ${stop.rating}★
+  - Why: ${stop.reason}
+  - Tags: ${stop.tags.join(", ")}`).join("\n\n")}
+
+Total Duration: ${flow.totalDuration} minutes
+Budget: ${flow.budgetRange}
 `;
     }
 
-    const systemPrompt = `You are Kelp AI Assistant, a helpful and friendly AI that helps users plan their perfect night out. You have access to the user's current itinerary and can suggest modifications.
+    const systemPrompt = `You are Kelp AI Assistant, a smart and helpful AI that helps users refine their night out itinerary.
 
-${flowContext ? `CURRENT ITINERARY:\n${flowContext}` : "No itinerary created yet."}
+${flowContext ? flowContext : "No itinerary created yet - suggest the user fill out the form first."}
 
-CAPABILITIES:
-- Suggest swapping stops for cheaper/better alternatives
-- Recommend adding romantic, outdoor, or specific vibe spots
-- Help adjust timing and duration
-- Provide local insights and tips
+YOUR CAPABILITIES:
+1. Swap stops for different venues (cheaper, different vibe, different cuisine)
+2. Remove stops from the itinerary
+3. Suggest timing adjustments
+4. Provide local tips and recommendations
 
-RESPONSE FORMAT:
-When suggesting flow changes, include a JSON block in your response using this format:
+CRITICAL - WHEN TO INCLUDE FLOW CHANGES:
+When the user asks to modify their flow (swap a stop, remove something, change a venue), you MUST include a JSON block with your changes.
+
+FORMAT FOR FLOW CHANGES (include this EXACTLY when making modifications):
 \`\`\`json
 {
   "action": "update_flow",
   "changes": {
-    "swap": [{"stopIndex": 0, "newStop": {"name": "New Place", "category": "Restaurant", "rating": 4.5, "price": "$$", "reason": "Better value with great atmosphere", "duration": 90, "tags": ["Cozy", "Date Night"]}}],
-    "remove": [],
-    "reorder": []
+    "swap": [
+      {
+        "stopIndex": 0,
+        "newStop": {
+          "name": "New Venue Name",
+          "category": "Restaurant",
+          "rating": 4.5,
+          "price": "$$",
+          "reason": "Why this is a better choice",
+          "duration": 90,
+          "tags": ["Tag1", "Tag2", "Tag3"]
+        }
+      }
+    ],
+    "remove": []
   }
 }
 \`\`\`
 
-Only include the JSON block when you're making actual suggestions to modify the flow. For general conversation, just respond naturally.
+RULES:
+- stopIndex is 0-based (first stop = 0, second = 1, etc.)
+- For swaps: provide complete newStop object with all fields
+- For removals: add the stopIndex numbers to the "remove" array
+- You can combine swaps and removes in one response
+- ONLY include the JSON block when making actual changes to the flow
+- For general questions/tips, just respond conversationally without JSON
 
-Be concise, friendly, and helpful. When making suggestions, explain WHY the change would improve their experience.`;
+EXAMPLES:
+- "Make it cheaper" → Swap expensive stops for budget-friendly alternatives, include JSON
+- "Remove the second stop" → Add 1 to the remove array, include JSON  
+- "What's good about this bar?" → Just answer the question, no JSON
+- "Swap the restaurant for Italian" → Swap that stop with an Italian restaurant, include JSON
+
+Be friendly, helpful, and concise. Always explain WHY your suggestion improves their experience.`;
 
     const messages = [
       { role: "system", content: systemPrompt },
       ...(conversationHistory || []),
       { role: "user", content: message },
     ];
+
+    console.log("Calling Lovable AI...");
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -90,7 +129,7 @@ Be concise, friendly, and helpful. When making suggestions, explain WHY the chan
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
         messages,
-        max_tokens: 1024,
+        max_tokens: 1500,
         temperature: 0.7,
       }),
     });
@@ -116,12 +155,18 @@ Be concise, friendly, and helpful. When making suggestions, explain WHY the chan
     const data = await response.json();
     const assistantMessage = data.choices?.[0]?.message?.content || "I apologize, but I couldn't generate a response. Please try again.";
 
+    console.log("AI response received:", assistantMessage.substring(0, 200));
+
     // Parse any flow changes from the response
     let flowChanges = null;
     const jsonMatch = assistantMessage.match(/```json\s*([\s\S]*?)\s*```/);
     if (jsonMatch) {
       try {
-        flowChanges = JSON.parse(jsonMatch[1]);
+        const parsed = JSON.parse(jsonMatch[1]);
+        if (parsed.action === "update_flow" && parsed.changes) {
+          flowChanges = parsed;
+          console.log("Parsed flow changes:", JSON.stringify(flowChanges));
+        }
       } catch (e) {
         console.error("Failed to parse flow changes JSON:", e);
       }

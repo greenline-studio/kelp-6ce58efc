@@ -19,8 +19,14 @@ interface FlowStop {
   imageUrl?: string;
 }
 
+interface PlanStep {
+  type: string;
+  yelpCategory: string;
+  searchTerm: string;
+  duration: number;
+}
+
 serve(async (req) => {
-  // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -29,6 +35,8 @@ serve(async (req) => {
     const { location, description, budget, timeWindow, vibes, crewSize } = await req.json();
 
     const YELP_API_KEY = Deno.env.get('YELP_API_KEY');
+    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+    
     if (!YELP_API_KEY) {
       console.error('YELP_API_KEY not configured');
       return new Response(
@@ -39,26 +47,61 @@ serve(async (req) => {
 
     console.log('Generating flow for:', { location, description, budget, timeWindow, vibes, crewSize });
 
-    // Map budget to price filter
-    const priceMap: Record<string, string> = {
+    // Map budget to Yelp price filter
+    const budgetToPriceMap: Record<string, string> = {
       '$': '1',
       '$$': '1,2',
       '$$$': '1,2,3',
       '$$$$': '1,2,3,4',
     };
-    const priceFilter = priceMap[budget] || '1,2,3';
+    const priceFilter = budgetToPriceMap[budget] || '1,2,3';
 
-    // Determine categories based on vibes and time
-    const categories = determineCategories(vibes, timeWindow);
+    // Use AI to understand the user's plan and determine appropriate venue types
+    let planSteps: PlanStep[] = [];
     
-    // Search for businesses
-    const businesses = await searchYelpBusinesses(YELP_API_KEY, location, categories, priceFilter);
+    if (LOVABLE_API_KEY) {
+      planSteps = await analyzePlanWithAI(LOVABLE_API_KEY, description, timeWindow, vibes);
+      console.log('AI determined plan steps:', planSteps);
+    }
+    
+    // Fallback if AI fails or no API key
+    if (planSteps.length === 0) {
+      planSteps = getDefaultPlanSteps(description, timeWindow, vibes);
+      console.log('Using default plan steps:', planSteps);
+    }
 
-    if (!businesses || businesses.length === 0) {
+    // Search Yelp for each step in the plan
+    const stops: FlowStop[] = [];
+    let currentHour = getStartHour(timeWindow);
+    
+    for (let i = 0; i < planSteps.length; i++) {
+      const step = planSteps[i];
+      const business = await searchYelpForStep(YELP_API_KEY, location, step, priceFilter);
+      
+      if (business) {
+        const time = formatTime(currentHour, 0);
+        stops.push({
+          id: business.id || `stop-${i}`,
+          name: business.name,
+          category: business.categories?.[0]?.title || step.type,
+          rating: business.rating || 4.0,
+          price: business.price || '$$',
+          reason: generateSmartReason(business, step, vibes),
+          time,
+          duration: step.duration,
+          tags: generateSmartTags(business, step, vibes),
+          yelpUrl: business.url,
+          imageUrl: business.image_url,
+        });
+        currentHour += Math.ceil(step.duration / 60);
+      }
+    }
+
+    if (stops.length === 0) {
       console.log('No businesses found, returning fallback');
       return new Response(
         JSON.stringify({ 
-          stops: generateFallbackStops(timeWindow),
+          stops: generateFallbackStops(timeWindow, description),
           totalDuration: 240,
           budgetRange: getBudgetRange(budget)
         }),
@@ -66,11 +109,7 @@ serve(async (req) => {
       );
     }
 
-    // Build the flow from real Yelp data
-    const stops = buildFlowFromBusinesses(businesses, timeWindow, vibes);
-
     const totalDuration = stops.reduce((sum, stop) => sum + stop.duration, 0);
-
     console.log('Generated flow with', stops.length, 'stops');
 
     return new Response(
@@ -91,126 +130,188 @@ serve(async (req) => {
   }
 });
 
-async function searchYelpBusinesses(apiKey: string, location: string, categories: string[], priceFilter: string) {
-  const allBusinesses: any[] = [];
+async function analyzePlanWithAI(apiKey: string, description: string, timeWindow: string, vibes: string[]): Promise<PlanStep[]> {
+  try {
+    const prompt = `Analyze this outing plan and extract the distinct activities/stops the user wants.
 
-  for (const category of categories) {
-    try {
-      const params = new URLSearchParams({
-        location,
-        categories: category,
-        price: priceFilter,
-        limit: '5',
-        sort_by: 'rating',
-      });
+User's plan: "${description}"
+Time of day: ${timeWindow}
+Vibes: ${vibes.join(', ') || 'casual'}
 
-      const response = await fetch(`https://api.yelp.com/v3/businesses/search?${params}`, {
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Accept': 'application/json',
-        },
-      });
+Return a JSON array of 2-5 stops. Each stop should have:
+- type: human readable activity type (e.g., "Sightseeing", "Lunch", "Bar", "Nightclub", "Coffee", "Museum", "Park", "Dinner", "Rooftop Bar", "Jazz Club")
+- yelpCategory: the Yelp API category to search (use valid Yelp categories like: landmarks, restaurants, bars, nightlife, danceclubs, cafes, museums, parks, cocktailbars, lounges, winebars, breakfast_brunch, italian, japanese, mexican, steakhouses, seafood, pizza)
+- searchTerm: additional search term to find the right venue (e.g., "rooftop", "live music", "craft cocktails")  
+- duration: estimated time in minutes (30-120)
 
-      if (!response.ok) {
-        console.error(`Yelp API error for ${category}:`, response.status);
-        continue;
+IMPORTANT: Parse the user's description to understand what they ACTUALLY want. If they say "sightseeing, lunch, bar, nightclub" - create stops for each of those, not just restaurants.
+
+Respond ONLY with the JSON array, no other text.`;
+
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash",
+        messages: [
+          { role: "user", content: prompt }
+        ],
+        max_tokens: 1024,
+        temperature: 0.3,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error('AI analysis failed:', response.status);
+      return [];
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '';
+    
+    // Extract JSON from response
+    const jsonMatch = content.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map((step: any) => ({
+          type: step.type || 'Activity',
+          yelpCategory: step.yelpCategory || 'restaurants',
+          searchTerm: step.searchTerm || '',
+          duration: step.duration || 60,
+        }));
       }
+    }
+    
+    return [];
+  } catch (error) {
+    console.error('AI analysis error:', error);
+    return [];
+  }
+}
 
-      const data = await response.json();
-      if (data.businesses && data.businesses.length > 0) {
-        allBusinesses.push(...data.businesses);
-      }
-    } catch (error) {
-      console.error(`Error searching ${category}:`, error);
+function getDefaultPlanSteps(description: string, timeWindow: string, vibes: string[]): PlanStep[] {
+  const desc = description.toLowerCase();
+  const steps: PlanStep[] = [];
+  
+  // Parse common activities from description
+  if (desc.includes('sightseeing') || desc.includes('sight seeing') || desc.includes('tourist') || desc.includes('explore')) {
+    steps.push({ type: 'Sightseeing', yelpCategory: 'landmarks', searchTerm: 'tourist attractions', duration: 90 });
+  }
+  if (desc.includes('museum') || desc.includes('art') || desc.includes('gallery')) {
+    steps.push({ type: 'Museum', yelpCategory: 'museums', searchTerm: '', duration: 90 });
+  }
+  if (desc.includes('brunch')) {
+    steps.push({ type: 'Brunch', yelpCategory: 'breakfast_brunch', searchTerm: 'brunch', duration: 75 });
+  }
+  if (desc.includes('lunch') || desc.includes('eat')) {
+    steps.push({ type: 'Lunch', yelpCategory: 'restaurants', searchTerm: 'lunch', duration: 75 });
+  }
+  if (desc.includes('dinner')) {
+    steps.push({ type: 'Dinner', yelpCategory: 'restaurants', searchTerm: 'dinner', duration: 90 });
+  }
+  if (desc.includes('coffee') || desc.includes('cafe')) {
+    steps.push({ type: 'Coffee', yelpCategory: 'cafes', searchTerm: '', duration: 45 });
+  }
+  if (desc.includes('bar') && !desc.includes('nightclub')) {
+    steps.push({ type: 'Bar', yelpCategory: 'bars', searchTerm: 'cocktails', duration: 60 });
+  }
+  if (desc.includes('rooftop')) {
+    steps.push({ type: 'Rooftop Bar', yelpCategory: 'bars', searchTerm: 'rooftop', duration: 60 });
+  }
+  if (desc.includes('nightclub') || desc.includes('club') || desc.includes('dancing')) {
+    steps.push({ type: 'Nightclub', yelpCategory: 'danceclubs', searchTerm: 'nightclub', duration: 120 });
+  }
+  if (desc.includes('live music') || desc.includes('jazz') || desc.includes('concert')) {
+    steps.push({ type: 'Live Music', yelpCategory: 'musicvenues', searchTerm: 'live music', duration: 90 });
+  }
+  if (desc.includes('karaoke')) {
+    steps.push({ type: 'Karaoke', yelpCategory: 'karaoke', searchTerm: '', duration: 90 });
+  }
+  
+  // If no specific activities found, create generic based on time window
+  if (steps.length === 0) {
+    if (timeWindow === 'afternoon') {
+      steps.push(
+        { type: 'Lunch', yelpCategory: 'restaurants', searchTerm: '', duration: 75 },
+        { type: 'Dessert', yelpCategory: 'desserts', searchTerm: '', duration: 45 },
+        { type: 'Activity', yelpCategory: 'entertainment', searchTerm: '', duration: 60 }
+      );
+    } else if (timeWindow === 'evening') {
+      steps.push(
+        { type: 'Dinner', yelpCategory: 'restaurants', searchTerm: '', duration: 90 },
+        { type: 'Bar', yelpCategory: 'bars', searchTerm: '', duration: 60 },
+        { type: 'Entertainment', yelpCategory: 'nightlife', searchTerm: '', duration: 60 }
+      );
+    } else {
+      steps.push(
+        { type: 'Bar', yelpCategory: 'bars', searchTerm: '', duration: 60 },
+        { type: 'Nightlife', yelpCategory: 'nightlife', searchTerm: '', duration: 90 },
+        { type: 'Late Night', yelpCategory: 'danceclubs', searchTerm: '', duration: 120 }
+      );
     }
   }
-
-  // Remove duplicates by id
-  const uniqueBusinesses = allBusinesses.filter(
-    (business, index, self) => index === self.findIndex(b => b.id === business.id)
-  );
-
-  return uniqueBusinesses;
+  
+  return steps.slice(0, 5);
 }
 
-function determineCategories(vibes: string[], timeWindow: string): string[] {
-  const categories: string[] = [];
+async function searchYelpForStep(apiKey: string, location: string, step: PlanStep, priceFilter: string): Promise<any | null> {
+  try {
+    const params = new URLSearchParams({
+      location,
+      categories: step.yelpCategory,
+      limit: '10',
+      sort_by: 'rating',
+    });
+    
+    // Add search term if provided
+    if (step.searchTerm) {
+      params.set('term', step.searchTerm);
+    }
+    
+    // Only add price filter for food/drink venues, not attractions
+    if (!['landmarks', 'museums', 'parks', 'entertainment'].includes(step.yelpCategory)) {
+      params.set('price', priceFilter);
+    }
 
-  // Base categories for different time windows
-  if (timeWindow === 'afternoon') {
-    categories.push('cafes', 'desserts', 'parks');
-  } else if (timeWindow === 'evening') {
-    categories.push('restaurants', 'bars', 'cocktailbars');
-  } else if (timeWindow === 'late night') {
-    categories.push('bars', 'nightlife', 'danceclubs');
-  }
+    const response = await fetch(`https://api.yelp.com/v3/businesses/search?${params}`, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Accept': 'application/json',
+      },
+    });
 
-  // Add vibe-specific categories
-  if (vibes.includes('romantic')) {
-    categories.push('wine_bars', 'french', 'italian');
-  }
-  if (vibes.includes('adventurous')) {
-    categories.push('escapegames', 'arcades', 'karaoke');
-  }
-  if (vibes.includes('chill')) {
-    categories.push('lounges', 'coffee', 'bookstores');
-  }
-  if (vibes.includes('bougie')) {
-    categories.push('steak', 'seafood', 'champagne_bars');
-  }
-  if (vibes.includes('lively')) {
-    categories.push('sportsbars', 'beergardens', 'breweries');
-  }
+    if (!response.ok) {
+      console.error(`Yelp API error for ${step.type}:`, response.status);
+      return null;
+    }
 
-  return [...new Set(categories)].slice(0, 5);
+    const data = await response.json();
+    
+    // Return a random top-rated business to add variety
+    if (data.businesses && data.businesses.length > 0) {
+      const topBusinesses = data.businesses.slice(0, 5);
+      return topBusinesses[Math.floor(Math.random() * topBusinesses.length)];
+    }
+    
+    return null;
+  } catch (error) {
+    console.error(`Error searching for ${step.type}:`, error);
+    return null;
+  }
 }
 
-function buildFlowFromBusinesses(businesses: any[], timeWindow: string, vibes: string[]): FlowStop[] {
-  // Sort by rating and take top businesses
-  const sortedBusinesses = businesses
-    .sort((a, b) => (b.rating || 0) - (a.rating || 0))
-    .slice(0, 4);
-
-  // Determine start time based on time window
-  let startHour = timeWindow === 'afternoon' ? 14 : timeWindow === 'evening' ? 18 : 21;
-
-  const stops: FlowStop[] = sortedBusinesses.map((business, index) => {
-    const duration = getDurationForCategory(business.categories?.[0]?.alias || 'restaurant');
-    const time = formatTime(startHour, index === 0 ? 0 : 30);
-    startHour += Math.ceil(duration / 60);
-
-    return {
-      id: business.id,
-      name: business.name,
-      category: business.categories?.[0]?.title || 'Restaurant',
-      rating: business.rating || 4.0,
-      price: business.price || '$$',
-      reason: generateReason(business, vibes),
-      time,
-      duration,
-      tags: generateTags(business, vibes),
-      yelpUrl: business.url,
-      imageUrl: business.image_url,
-    };
-  });
-
-  return stops;
-}
-
-function getDurationForCategory(category: string): number {
-  const durations: Record<string, number> = {
-    restaurants: 90,
-    bars: 60,
-    cocktailbars: 60,
-    cafes: 45,
-    nightlife: 90,
-    danceclubs: 120,
-    wine_bars: 75,
-    desserts: 30,
-    arcades: 60,
-    karaoke: 90,
-  };
-  return durations[category] || 60;
+function getStartHour(timeWindow: string): number {
+  switch (timeWindow) {
+    case 'morning': return 9;
+    case 'afternoon': return 12;
+    case 'evening': return 18;
+    case 'late night': return 21;
+    default: return 14;
+  }
 }
 
 function formatTime(hour: number, minuteOffset: number): string {
@@ -222,26 +323,34 @@ function formatTime(hour: number, minuteOffset: number): string {
   return `${displayHour}:${m.toString().padStart(2, '0')} ${period}`;
 }
 
-function generateReason(business: any, vibes: string[]): string {
-  const category = business.categories?.[0]?.title || 'spot';
+function generateSmartReason(business: any, step: PlanStep, vibes: string[]): string {
   const rating = business.rating || 4.0;
+  const reviewCount = business.review_count || 0;
+  const category = business.categories?.[0]?.title || step.type;
+  const vibe = vibes[0] || 'great';
   
-  const reasons = [
-    `Highly-rated ${category.toLowerCase()} with ${rating}★ reviews`,
-    `Perfect ${category.toLowerCase()} for your ${vibes[0] || 'chill'} vibe`,
-    `Top pick in the area - ${rating}★ and great atmosphere`,
-    `Local favorite known for excellent service and ambiance`,
+  const templates = [
+    `Top-rated ${category.toLowerCase()} with ${rating}★ from ${reviewCount}+ reviews`,
+    `Perfect ${step.type.toLowerCase()} spot – ${rating}★ rating, known for ${vibe} atmosphere`,
+    `Locals love this ${category.toLowerCase()} – ${rating}★ and ideal for your ${step.type.toLowerCase()}`,
+    `Highly recommended for ${step.type.toLowerCase()} – ${reviewCount}+ happy visitors`,
   ];
   
-  return reasons[Math.floor(Math.random() * reasons.length)];
+  return templates[Math.floor(Math.random() * templates.length)];
 }
 
-function generateTags(business: any, vibes: string[]): string[] {
+function generateSmartTags(business: any, step: PlanStep, vibes: string[]): string[] {
   const tags: string[] = [];
   
-  // Add category-based tags
-  if (business.categories) {
-    tags.push(...business.categories.slice(0, 2).map((c: any) => c.title));
+  // Add the activity type as first tag
+  tags.push(step.type);
+  
+  // Add category from business
+  if (business.categories && business.categories[0]) {
+    const catTitle = business.categories[0].title;
+    if (catTitle !== step.type) {
+      tags.push(catTitle);
+    }
   }
   
   // Add rating tag if high
@@ -249,7 +358,7 @@ function generateTags(business: any, vibes: string[]): string[] {
     tags.push('Top Rated');
   }
   
-  // Add relevant vibe tags
+  // Add vibe tag
   if (vibes.length > 0) {
     tags.push(vibes[0].charAt(0).toUpperCase() + vibes[0].slice(1));
   }
@@ -267,20 +376,20 @@ function getBudgetRange(budget: string): string {
   return ranges[budget] || '$40-80 per person';
 }
 
-function generateFallbackStops(timeWindow: string): FlowStop[] {
-  const startHour = timeWindow === 'afternoon' ? 14 : timeWindow === 'evening' ? 18 : 21;
+function generateFallbackStops(timeWindow: string, description: string): FlowStop[] {
+  const startHour = getStartHour(timeWindow);
   
   return [
     {
       id: 'fallback-1',
-      name: 'Local Favorite Spot',
-      category: 'Restaurant',
+      name: 'Popular Local Spot',
+      category: 'Activity',
       rating: 4.5,
       price: '$$',
-      reason: 'A great starting point for your outing',
+      reason: 'A great starting point based on your preferences',
       time: formatTime(startHour, 0),
       duration: 60,
-      tags: ['Popular', 'Great Food'],
+      tags: ['Popular', 'Recommended'],
       imageUrl: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=400&h=300&fit=crop',
     },
     {
@@ -289,7 +398,7 @@ function generateFallbackStops(timeWindow: string): FlowStop[] {
       category: 'Bar',
       rating: 4.3,
       price: '$$',
-      reason: 'Perfect atmosphere to continue the evening',
+      reason: 'Perfect atmosphere to continue your outing',
       time: formatTime(startHour + 1, 30),
       duration: 60,
       tags: ['Cozy', 'Great Drinks'],
