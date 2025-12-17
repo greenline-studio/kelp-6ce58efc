@@ -63,27 +63,27 @@ export const HeroFlowPreview = () => {
   }, []);
 
   return (
-    <div className="relative">
+    <div className="relative mt-24 sm:mt-20">
       {/* Chat bubble */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.8, duration: 0.5 }}
-        className="absolute -top-16 -left-4 glass-card px-4 py-3 max-w-[280px]"
+        className="absolute -top-20 sm:-top-16 left-0 glass-card px-4 py-3 max-w-[300px] sm:max-w-[320px]"
       >
-        <p className="text-sm text-muted-foreground mb-2">
+        <p className="text-sm text-muted-foreground mb-3 leading-relaxed">
           "Cozy date night in Dallas, budget-friendly"
         </p>
         <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center">
+          <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
             <span className="text-primary text-xs font-bold">K</span>
           </div>
-          <p className="text-sm text-foreground">Here's your 3-stop flow ✨</p>
+          <p className="text-sm text-foreground leading-relaxed">Here's your 3-stop flow ✨</p>
         </div>
       </motion.div>
 
       {/* Flow cards */}
-      <div className="relative space-y-3 pt-8">
+      <div className="relative space-y-3 pt-10 sm:pt-8">
         {/* Vertical timeline line */}
         <div className="absolute left-6 top-12 bottom-4 w-px bg-gradient-to-b from-primary/50 via-primary/30 to-transparent" />
 
