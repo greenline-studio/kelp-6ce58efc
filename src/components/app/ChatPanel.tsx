@@ -3,7 +3,9 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Send, Sparkles, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import type { Flow } from "@/pages/App";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
+import type { Flow, FlowStop } from "@/pages/App";
 
 interface Message {
   id: string;
@@ -13,6 +15,7 @@ interface Message {
 
 interface ChatPanelProps {
   flow: Flow | null;
+  onUpdateFlow?: (updatedFlow: Flow) => void;
 }
 
 const quickActions = [
@@ -22,25 +25,37 @@ const quickActions = [
   "Shorter evening",
 ];
 
-export const ChatPanel = ({ flow }: ChatPanelProps) => {
+export const ChatPanel = ({ flow, onUpdateFlow }: ChatPanelProps) => {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "1",
       role: "assistant",
       content: flow
         ? "Your flow is ready! Ask me to refine it – swap stops, change the vibe, adjust timing, or add more options."
-        : "Hi! Describe your ideal outing and I'll create a personalized flow for you. Or use the form on the left to get started.",
+        : "Hi! Describe your ideal outing and I'll help you plan it. Or use the form on the left to get started.",
     },
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const handleSend = (message: string) => {
+  // Update initial message when flow changes
+  useEffect(() => {
+    if (flow && messages.length === 1 && messages[0].id === "1") {
+      setMessages([{
+        id: "1",
+        role: "assistant",
+        content: "Your flow is ready! Ask me to refine it – swap stops, change the vibe, adjust timing, or add more options.",
+      }]);
+    }
+  }, [flow]);
+
+  const handleSend = async (message: string) => {
     if (!message.trim()) return;
 
     const userMessage: Message = {
@@ -53,39 +68,111 @@ export const ChatPanel = ({ flow }: ChatPanelProps) => {
     setInput("");
     setIsLoading(true);
 
-    // Mock AI response - will be replaced with actual Yelp AI integration
-    setTimeout(() => {
+    try {
+      // Build conversation history for context
+      const conversationHistory = messages
+        .filter(m => m.id !== "1") // Skip initial welcome message
+        .map(m => ({ role: m.role, content: m.content }));
+
+      const { data, error } = await supabase.functions.invoke("chat-assistant", {
+        body: {
+          message,
+          flow,
+          conversationHistory,
+        },
+      });
+
+      if (error) {
+        throw error;
+      }
+
       const aiResponse: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: getAIResponse(message, flow),
+        content: data.message || "I apologize, I couldn't generate a response. Please try again.",
       };
       setMessages((prev) => [...prev, aiResponse]);
+
+      // Apply flow changes if any
+      if (data.flowChanges && flow && onUpdateFlow) {
+        applyFlowChanges(data.flowChanges, flow);
+      }
+    } catch (error: any) {
+      console.error("Chat error:", error);
+      
+      let errorMessage = "Sorry, I encountered an error. Please try again.";
+      if (error.message?.includes("429") || error.status === 429) {
+        errorMessage = "I'm receiving too many requests. Please wait a moment and try again.";
+      } else if (error.message?.includes("402") || error.status === 402) {
+        errorMessage = "AI credits exhausted. Please add credits to continue using the assistant.";
+      }
+      
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+
+      const errorResponse: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: errorMessage,
+      };
+      setMessages((prev) => [...prev, errorResponse]);
+    } finally {
       setIsLoading(false);
-    }, 1500);
+    }
   };
 
-  const getAIResponse = (message: string, flow: Flow | null): string => {
-    const lowerMessage = message.toLowerCase();
+  const applyFlowChanges = (flowChanges: any, currentFlow: Flow) => {
+    if (!flowChanges || flowChanges.action !== "update_flow" || !onUpdateFlow) return;
 
-    if (lowerMessage.includes("cheaper") || lowerMessage.includes("budget")) {
-      return "I've found some more budget-friendly alternatives! Try swapping 'Ember & Oak' with 'Luna Street Kitchen' - similar vibe, about 30% less expensive. Want me to make that change?";
-    }
-    if (lowerMessage.includes("romantic")) {
-      return "For a more romantic atmosphere, I'd suggest adding 'The Secret Garden' - a hidden courtyard wine bar with string lights and live acoustic music. Perfect for that intimate feel!";
-    }
-    if (lowerMessage.includes("outdoor")) {
-      return "Great choice! I can swap your first stop to 'The Garden Terrace' - they have a beautiful patio with city views. It's also pet-friendly if that matters!";
-    }
-    if (lowerMessage.includes("shorter") || lowerMessage.includes("quick")) {
-      return "To shorten your evening, we could skip the jazz club and end dinner around 10PM. That would save about 90 minutes. Shall I update the flow?";
+    const changes = flowChanges.changes;
+    let newStops = [...currentFlow.stops];
+
+    // Handle swaps
+    if (changes.swap && Array.isArray(changes.swap)) {
+      changes.swap.forEach((swap: any) => {
+        if (swap.stopIndex >= 0 && swap.stopIndex < newStops.length && swap.newStop) {
+          const existingStop = newStops[swap.stopIndex];
+          newStops[swap.stopIndex] = {
+            id: existingStop.id,
+            name: swap.newStop.name || existingStop.name,
+            category: swap.newStop.category || existingStop.category,
+            rating: swap.newStop.rating || existingStop.rating,
+            price: swap.newStop.price || existingStop.price,
+            reason: swap.newStop.reason || existingStop.reason,
+            time: existingStop.time,
+            duration: swap.newStop.duration || existingStop.duration,
+            tags: swap.newStop.tags || existingStop.tags,
+            yelpUrl: existingStop.yelpUrl,
+            imageUrl: existingStop.imageUrl,
+          };
+        }
+      });
     }
 
-    if (!flow) {
-      return "Let's create your perfect night out! Tell me more about what you're in the mood for - what vibe are you going for? Who are you going with? Any budget or time constraints?";
+    // Handle removals
+    if (changes.remove && Array.isArray(changes.remove)) {
+      const removeIndices = new Set(changes.remove);
+      newStops = newStops.filter((_, i) => !removeIndices.has(i));
     }
 
-    return "I can help you refine your flow! Try asking me to make it cheaper, add more romantic spots, include outdoor options, or adjust the timing.";
+    // Calculate new total duration
+    const totalDuration = newStops.reduce((sum, stop) => sum + stop.duration, 0);
+
+    const updatedFlow: Flow = {
+      ...currentFlow,
+      stops: newStops,
+      totalDuration,
+    };
+
+    onUpdateFlow(updatedFlow);
+    
+    toast({
+      title: "Flow Updated",
+      description: "I've made the changes to your itinerary.",
+    });
   };
 
   return (
@@ -96,10 +183,7 @@ export const ChatPanel = ({ flow }: ChatPanelProps) => {
           <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center">
             <Sparkles className="w-4 h-4 text-primary" />
           </div>
-          <div>
-            <h3 className="font-semibold text-sm">Kelp AI</h3>
-            <p className="text-xs text-muted-foreground">Powered by Yelp AI</p>
-          </div>
+          <h3 className="font-semibold text-sm">Kelp AI Assistant</h3>
         </div>
       </div>
 
@@ -156,6 +240,7 @@ export const ChatPanel = ({ flow }: ChatPanelProps) => {
                 size="sm"
                 className="shrink-0 text-xs"
                 onClick={() => handleSend(action)}
+                disabled={isLoading}
               >
                 {action}
               </Button>
@@ -178,6 +263,7 @@ export const ChatPanel = ({ flow }: ChatPanelProps) => {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             className="flex-1"
+            disabled={isLoading}
           />
           <Button
             type="submit"

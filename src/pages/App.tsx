@@ -223,7 +223,7 @@ const AppPage = () => {
                   mobileTab !== "chat" ? "hidden md:block" : ""
                 }`}
               >
-                <ChatPanel flow={flow} />
+                <ChatPanel flow={flow} onUpdateFlow={setFlow} />
               </motion.div>
             )}
           </AnimatePresence>
