@@ -7,6 +7,8 @@ import { ChatPanel } from "@/components/app/ChatPanel";
 import { FlowSummaryBar } from "@/components/app/FlowSummaryBar";
 import { Menu, X, MessageCircle, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
 export interface FlowStop {
   id: string;
@@ -34,6 +36,7 @@ const AppPage = () => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [mobileTab, setMobileTab] = useState<"plan" | "chat">("plan");
   const [showChat, setShowChat] = useState(true);
+  const { toast } = useToast();
 
   const handleGenerateFlow = async (scenario: {
     location: string;
@@ -41,60 +44,62 @@ const AppPage = () => {
     budget: string;
     timeWindow: string;
     vibes: string[];
+    crewSize?: number;
   }) => {
     setIsGenerating(true);
     
-    // Mock flow generation - will be replaced with Yelp API
-    setTimeout(() => {
-      const mockFlow: Flow = {
-        id: "flow-" + Date.now(),
-        stops: [
-          {
-            id: "1",
-            name: "The Velvet Room",
-            category: "Cocktail Bar",
-            rating: 4.7,
-            price: "$$",
-            reason: "Perfect rooftop vibes to start your evening with craft cocktails",
-            time: "7:00 PM",
-            duration: 60,
-            tags: ["Rooftop", "Craft Cocktails", "Date Night"],
-            yelpUrl: "https://yelp.com",
-            imageUrl: "https://images.unsplash.com/photo-1470337458703-46ad1756a187?w=400&h=300&fit=crop",
-          },
-          {
-            id: "2",
-            name: "Ember & Oak",
-            category: "New American",
-            rating: 4.8,
-            price: "$$",
-            reason: "Romantic candlelit dinner with farm-to-table cuisine",
-            time: "8:30 PM",
-            duration: 90,
-            tags: ["Romantic", "Farm-to-Table", "Intimate"],
-            yelpUrl: "https://yelp.com",
-            imageUrl: "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=400&h=300&fit=crop",
-          },
-          {
-            id: "3",
-            name: "Blue Note Jazz Club",
-            category: "Jazz Club",
-            rating: 4.6,
-            price: "$$",
-            reason: "End the night with live jazz in an intimate setting",
-            time: "10:30 PM",
-            duration: 90,
-            tags: ["Live Music", "Intimate", "Classic"],
-            yelpUrl: "https://yelp.com",
-            imageUrl: "https://images.unsplash.com/photo-1415201364774-f6f0bb35f28f?w=400&h=300&fit=crop",
-          },
-        ],
-        totalDuration: 240,
-        budgetRange: "$80-120 per person",
-      };
-      setFlow(mockFlow);
+    try {
+      const { data, error } = await supabase.functions.invoke('generate-flow', {
+        body: {
+          location: scenario.location,
+          description: scenario.description,
+          budget: scenario.budget,
+          timeWindow: scenario.timeWindow,
+          vibes: scenario.vibes,
+          crewSize: scenario.crewSize || 2,
+        },
+      });
+
+      if (error) {
+        console.error('Error generating flow:', error);
+        toast({
+          title: "Error",
+          description: "Failed to generate your flow. Please try again.",
+          variant: "destructive",
+        });
+        setIsGenerating(false);
+        return;
+      }
+
+      if (data && data.stops) {
+        const generatedFlow: Flow = {
+          id: "flow-" + Date.now(),
+          stops: data.stops,
+          totalDuration: data.totalDuration || 240,
+          budgetRange: data.budgetRange || "$40-80 per person",
+        };
+        setFlow(generatedFlow);
+        toast({
+          title: "Flow Generated!",
+          description: `Found ${data.stops.length} great spots for your outing.`,
+        });
+      } else {
+        toast({
+          title: "No Results",
+          description: "No matching places found. Try a different location or preferences.",
+          variant: "destructive",
+        });
+      }
+    } catch (err) {
+      console.error('Error:', err);
+      toast({
+        title: "Error",
+        description: "Something went wrong. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
       setIsGenerating(false);
-    }, 2000);
+    }
   };
 
   const handleUpdateStop = (stopId: string, action: "swap" | "remove" | "moveUp" | "moveDown") => {

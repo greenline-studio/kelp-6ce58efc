@@ -1,1 +1,4 @@
 project_id = "dbhmmtzpgypfxwghxeij"
+
+[functions.generate-flow]
+verify_jwt = false
