@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { MapPin, Loader2, Sparkles } from "lucide-react";
+import { MapPin, Loader2, Sparkles, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { useNavigate } from "react-router-dom";
 
 interface ScenarioFormProps {
   onSubmit: (scenario: {
@@ -16,7 +17,12 @@ interface ScenarioFormProps {
   isLoading: boolean;
 }
 
-const budgetOptions = ["$", "$$", "$$$"];
+const budgetOptions = [
+  { label: "$0-25", value: "$" },
+  { label: "$25-50", value: "$$" },
+  { label: "$50-100", value: "$$$" },
+  { label: "$100+", value: "$$$$" },
+];
 const timeOptions = ["afternoon", "evening", "late night"];
 const vibeOptions = [
   "romantic",
@@ -35,6 +41,7 @@ const preferenceOptions = [
 ];
 
 export const ScenarioForm = ({ onSubmit, isLoading }: ScenarioFormProps) => {
+  const navigate = useNavigate();
   const [location, setLocation] = useState("");
   const [description, setDescription] = useState("");
   const [budget, setBudget] = useState("$$");
@@ -87,13 +94,23 @@ export const ScenarioForm = ({ onSubmit, isLoading }: ScenarioFormProps) => {
       animate={{ opacity: 1, y: 0 }}
       className="space-y-8"
     >
-      <div className="text-center space-y-2">
-        <h1 className="text-2xl sm:text-3xl font-bold">
-          What's the <span className="text-gradient">vibe</span>?
-        </h1>
-        <p className="text-muted-foreground">
-          Tell us about your ideal night out and we'll craft the perfect flow.
-        </p>
+      <div className="flex items-center gap-4">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => navigate("/")}
+          className="shrink-0"
+        >
+          <ArrowLeft className="w-5 h-5" />
+        </Button>
+        <div className="text-center flex-1">
+          <h1 className="text-2xl sm:text-3xl font-bold">
+            What's the <span className="text-gradient">vibe</span>?
+          </h1>
+          <p className="text-muted-foreground">
+            Tell us about your ideal night out and we'll craft the perfect flow.
+          </p>
+        </div>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
@@ -135,18 +152,18 @@ export const ScenarioForm = ({ onSubmit, isLoading }: ScenarioFormProps) => {
 
         {/* Budget */}
         <div className="space-y-2">
-          <label className="text-sm font-medium">Budget</label>
-          <div className="flex gap-2">
+          <label className="text-sm font-medium">Budget (per person)</label>
+          <div className="flex gap-2 flex-wrap">
             {budgetOptions.map((opt) => (
               <Button
-                key={opt}
+                key={opt.value}
                 type="button"
-                variant={budget === opt ? "default" : "outline"}
+                variant={budget === opt.value ? "default" : "outline"}
                 size="sm"
-                onClick={() => setBudget(opt)}
-                className="flex-1"
+                onClick={() => setBudget(opt.value)}
+                className="flex-1 min-w-[70px]"
               >
-                {opt}
+                {opt.label}
               </Button>
             ))}
           </div>
