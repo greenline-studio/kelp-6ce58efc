@@ -12,7 +12,7 @@ export const Footer = () => {
             </div>
             <span className="text-lg font-bold">Kelp</span>
             <span className="text-sm text-muted-foreground ml-2">
-              Built for Yelp AI Hackathon 2024
+              Built for Yelp AI Hackathon 2025
             </span>
           </div>
 
