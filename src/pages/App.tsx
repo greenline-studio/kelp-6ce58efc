@@ -19,6 +19,7 @@ export interface FlowStop {
   duration: number;
   tags: string[];
   yelpUrl?: string;
+  imageUrl?: string;
 }
 
 export interface Flow {
@@ -59,6 +60,7 @@ const AppPage = () => {
             duration: 60,
             tags: ["Rooftop", "Craft Cocktails", "Date Night"],
             yelpUrl: "https://yelp.com",
+            imageUrl: "https://images.unsplash.com/photo-1470337458703-46ad1756a187?w=400&h=300&fit=crop",
           },
           {
             id: "2",
@@ -71,6 +73,7 @@ const AppPage = () => {
             duration: 90,
             tags: ["Romantic", "Farm-to-Table", "Intimate"],
             yelpUrl: "https://yelp.com",
+            imageUrl: "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=400&h=300&fit=crop",
           },
           {
             id: "3",
@@ -83,6 +86,7 @@ const AppPage = () => {
             duration: 90,
             tags: ["Live Music", "Intimate", "Classic"],
             yelpUrl: "https://yelp.com",
+            imageUrl: "https://images.unsplash.com/photo-1415201364774-f6f0bb35f28f?w=400&h=300&fit=crop",
           },
         ],
         totalDuration: 240,
