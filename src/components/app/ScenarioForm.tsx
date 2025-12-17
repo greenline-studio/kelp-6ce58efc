@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { MapPin, Loader2, Sparkles, ArrowLeft } from "lucide-react";
+import { MapPin, Loader2, Sparkles, ArrowLeft, Users, Minus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -13,15 +13,16 @@ interface ScenarioFormProps {
     budget: string;
     timeWindow: string;
     vibes: string[];
+    crewSize: number;
   }) => void;
   isLoading: boolean;
 }
 
 const budgetOptions = [
-  { label: "$0-25", value: "$" },
-  { label: "$25-50", value: "$$" },
-  { label: "$50-100", value: "$$$" },
-  { label: "$100+", value: "$$$$" },
+  { label: "Econ", sublabel: "<$30", value: "$" },
+  { label: "Standard", sublabel: "$30-60", value: "$$" },
+  { label: "Premium", sublabel: "$60-100", value: "$$$" },
+  { label: "Splurge", sublabel: "$100+", value: "$$$$" },
 ];
 const timeOptions = ["afternoon", "evening", "late night"];
 const vibeOptions = [
@@ -48,6 +49,7 @@ export const ScenarioForm = ({ onSubmit, isLoading }: ScenarioFormProps) => {
   const [timeWindow, setTimeWindow] = useState("evening");
   const [vibes, setVibes] = useState<string[]>([]);
   const [preferences, setPreferences] = useState<string[]>([]);
+  const [crewSize, setCrewSize] = useState(2);
   const [isGettingLocation, setIsGettingLocation] = useState(false);
 
   const handleGetLocation = () => {
@@ -85,6 +87,7 @@ export const ScenarioForm = ({ onSubmit, isLoading }: ScenarioFormProps) => {
       budget,
       timeWindow,
       vibes: [...vibes, ...preferences],
+      crewSize,
     });
   };
 
@@ -152,20 +155,52 @@ export const ScenarioForm = ({ onSubmit, isLoading }: ScenarioFormProps) => {
 
         {/* Budget */}
         <div className="space-y-2">
-          <label className="text-sm font-medium">Budget (per person)</label>
-          <div className="flex gap-2 flex-wrap">
+          <label className="text-sm font-medium">Target Budget <span className="text-muted-foreground">(per person)</span></label>
+          <div className="grid grid-cols-2 gap-3">
             {budgetOptions.map((opt) => (
-              <Button
+              <button
                 key={opt.value}
                 type="button"
-                variant={budget === opt.value ? "default" : "outline"}
-                size="sm"
                 onClick={() => setBudget(opt.value)}
-                className="flex-1 min-w-[70px]"
+                className={`p-4 rounded-xl border-2 transition-all ${
+                  budget === opt.value
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border/50 bg-card/50 hover:border-border"
+                }`}
               >
-                {opt.label}
-              </Button>
+                <div className="font-semibold text-lg">{opt.label}</div>
+                <div className="text-sm text-muted-foreground">{opt.sublabel}</div>
+              </button>
             ))}
+          </div>
+        </div>
+
+        {/* Crew Size */}
+        <div className="space-y-2">
+          <label className="text-sm font-medium">Crew Size</label>
+          <div className="flex items-center gap-4 p-4 rounded-xl border border-border/50 bg-card/50">
+            <Users className="w-5 h-5 text-muted-foreground" />
+            <div className="flex items-center gap-4 flex-1">
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => setCrewSize(Math.max(1, crewSize - 1))}
+                className="h-8 w-8"
+              >
+                <Minus className="w-4 h-4" />
+              </Button>
+              <span className="text-xl font-semibold w-8 text-center">{crewSize}</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => setCrewSize(Math.min(20, crewSize + 1))}
+                className="h-8 w-8"
+              >
+                <Plus className="w-4 h-4" />
+              </Button>
+            </div>
           </div>
         </div>
 
