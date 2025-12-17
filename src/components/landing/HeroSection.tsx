@@ -74,15 +74,18 @@ export const HeroSection = () => {
               className="flex items-center gap-6 pt-4"
             >
               <div className="flex -space-x-2">
-                {[1, 2, 3, 4].map((i) => (
-                  <div
+                {[
+                  "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop&crop=face",
+                  "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&h=100&fit=crop&crop=face",
+                  "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=100&h=100&fit=crop&crop=face",
+                  "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&h=100&fit=crop&crop=face",
+                ].map((src, i) => (
+                  <img
                     key={i}
-                    className="w-8 h-8 rounded-full bg-secondary border-2 border-background flex items-center justify-center"
-                  >
-                    <span className="text-xs text-muted-foreground">
-                      {String.fromCharCode(64 + i)}
-                    </span>
-                  </div>
+                    src={src}
+                    alt={`User ${i + 1}`}
+                    className="w-8 h-8 rounded-full border-2 border-background object-cover"
+                  />
                 ))}
               </div>
               <p className="text-sm text-muted-foreground">
